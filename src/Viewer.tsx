@@ -10,8 +10,6 @@ import { initCornerstone } from './cornerstoneInit'
 
 const VIEWPORT_ID = 'VP'
 const ENGINE_ID = 'ENGINE'
-
-// --- Build imageIds from your UID-style filenames ---
 const SERIES_BASE = `${window.location.origin}/series/cranial/`
 const UID_PREFIX = '1.3.6.1.4.1.5962.99.1.2786334768.1849416866.1385765836848.'
 const UID_SUFFIX = '.0.dcm'
@@ -29,18 +27,13 @@ export default function Viewer() {
   const engineRef = useRef<RenderingEngine | null>(null)
   const vpRef = useRef<Types.IStackViewport | null>(null)
 
-  // Slice scrolling state
   const [index, setIndex] = useState(0)
   const total = imageIds.length
-
-  // Optional: simple invert toggle
-  const [invert, setInvert] = useState(false)
-
-  // Status
+  const [invert, setInvert] = useState(false)  
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Init + set up viewport
+  
   useEffect(() => {
     let destroyed = false
     ;(async () => {
@@ -56,13 +49,13 @@ export default function Viewer() {
         const element = elRef.current
         if (!element) throw new Error('Viewport element not mounted')
 
-        // Disable existing viewport (if any)
+        
         try {
           const existing = engine.getViewport(VIEWPORT_ID)
           if (existing) engine.disableElement(VIEWPORT_ID)
         } catch {}
 
-        // Enable STACK viewport
+        
         engine.enableElement({
           viewportId: VIEWPORT_ID,
           type: Enums.ViewportType.STACK,
@@ -75,7 +68,7 @@ export default function Viewer() {
         vpRef.current = vp
 
         await vp.setStack(imageIds)
-        await vp.setImageIdIndex(index) // start at current state
+        await vp.setImageIdIndex(index)
         vp.resetCamera()
         vp.setProperties({ invert })
         vp.render()
@@ -90,7 +83,7 @@ export default function Viewer() {
     return () => { destroyed = true }
   }, [])
 
-  // Apply invert changes
+
   useEffect(() => {
     const vp = vpRef.current
     if (!vp) return
@@ -100,7 +93,7 @@ export default function Viewer() {
     } catch {}
   }, [invert])
 
-  // Apply slice index changes
+
   useEffect(() => {
     const vp = vpRef.current
     if (!vp) return
@@ -114,7 +107,7 @@ export default function Viewer() {
     })()
   }, [index])
 
-  // Wheel + keyboard handlers for scrolling
+
   useEffect(() => {
     const el = elRef.current
     if (!el) return
@@ -153,15 +146,14 @@ export default function Viewer() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '350px 1550px', // ← both columns fixed
+          gridTemplateColumns: '350px 1500px',
           gap: 16,
           alignItems: 'stretch',
-          justifyContent: 'center', // center the two-column block in container
+          justifyContent: 'center',
         }}
       >
         {/* Left controls */}
         <div style={{ background: '#1f1f1f', padding: 12, borderRadius: 12 }}>
-          {/* Slice slider + buttons + invert */}
           <div style={{ marginBottom: 12 }}>
             <label>Slice: {index + 1} / {total}</label>
             <input
@@ -201,8 +193,8 @@ export default function Viewer() {
           style={{
             background: '#0d0d0d',
             borderRadius: 12,
-            width: '100%',  // ← fixed width
-            height: '80vh',  // fixed height
+            width: '100%',
+            height: '80vh',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
