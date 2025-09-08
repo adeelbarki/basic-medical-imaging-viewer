@@ -8,15 +8,14 @@ import {
   utilities,
   volumeLoader,
   metaData,
-  imageLoader,                 // ✅ prefetch metadata/pixels to populate metaData
+  imageLoader,
 } from '@cornerstonejs/core'
 import { initCornerstone } from './cornerstoneInit'
 
 type Props = { imageIds: string[] }
 
-const ENGINE_ID = 'ENGINE_SHARED'                 // shared across tabs
+const ENGINE_ID = 'ENGINE_SHARED'                 // reuse one WebGL engine across tabs
 const VIEWPORT_ID = 'VP_MPR'
-// Give MPR its own volume cache id so it doesn't reuse any stale one
 const VOLUME_ID_BASE = 'cornerstoneStreamingImageVolume:cranial-mpr'
 
 export default function MprAxialViewer({ imageIds }: Props) {
@@ -47,10 +46,10 @@ export default function MprAxialViewer({ imageIds }: Props) {
         const element = elRef.current
         if (!element) throw new Error('Viewport element not mounted')
 
-        // ---------- KEY: prefetch metadata so IPP/IOP is available ----------
+        // Prefetch metadata so IPP/IOP is available even if Stack tab wasn't used
         await prefetchPlaneMeta(imageIds)
 
-        // Filter & sort a coherent set, like your old code
+        // Filter & sort coherent set (same rule you used for working MPR)
         const { goodIds, reason } = buildMprImageIds(imageIds)
         if (goodIds.length < 3) {
           setError(reason ?? 'Insufficient geometric slices for MPR.')
@@ -58,9 +57,8 @@ export default function MprAxialViewer({ imageIds }: Props) {
           return
         }
 
-        // (Re)enable viewport cleanly
+        // Clean old viewport & enable orthographic viewport
         try { engine.disableElement(VIEWPORT_ID) } catch {}
-
         engine.enableElement({
           viewportId: VIEWPORT_ID,
           type: Enums.ViewportType.ORTHOGRAPHIC,
@@ -69,7 +67,7 @@ export default function MprAxialViewer({ imageIds }: Props) {
         })
         await raf()
 
-        // Create a fresh volume id each mount to avoid reusing
+        // Create volume and attach
         const VOLUME_ID = `${VOLUME_ID_BASE}-${goodIds.length}`
         const volume = await volumeLoader.createAndCacheVolume(VOLUME_ID, { imageIds: goodIds })
         await volume.load()
@@ -83,7 +81,7 @@ export default function MprAxialViewer({ imageIds }: Props) {
         vvp.resetCamera()
         vvp.render()
 
-        // Let slice context init, then scroll to requested index
+        // Initialize slice context, then scroll to current index
         await raf()
         const { numberOfSlices, imageIndex } = utilities.getImageSliceDataForVolumeViewport(vvp)
         const n = numberOfSlices ?? 0
@@ -102,11 +100,13 @@ export default function MprAxialViewer({ imageIds }: Props) {
       }
     })()
 
-    // Cleanup: only disable the viewport; keep shared engine alive
+    // Cleanup: only disable this viewport (keep shared engine alive)
     return () => {
       destroyed = true
       const eng = engineRef.current
-      if (eng) { try { eng.disableElement(VIEWPORT_ID) } catch {} }
+      if (eng) {
+        try { eng.disableElement(VIEWPORT_ID) } catch {}
+      }
       vpRef.current = null
     }
   }, [imageIds])
@@ -118,7 +118,7 @@ export default function MprAxialViewer({ imageIds }: Props) {
     try { vp.setProperties({ invert }); vp.render() } catch {}
   }, [invert])
 
-  // Index change → scroll using slice context (independent of Stack)
+  // Index change → scroll using slice context
   useEffect(() => {
     const vp = vpRef.current
     if (!vp || numSlices < 1) return
@@ -137,30 +137,42 @@ export default function MprAxialViewer({ imageIds }: Props) {
   }, [index, numSlices])
 
   const totalShown = Math.max(1, numSlices)
+  const clampIdx = (i: number) => clamp(i, 0, totalShown - 1)
 
   return (
-    <div style={{ background: '#181818', borderRadius: 12, padding: 12 }}>
-      <div style={{ marginBottom: 12, color: '#aaa' }}>
-        <label>Slice: {Math.min(index + 1, totalShown)} / {totalShown}</label>
+    <div className={`stack-viewer${invert ? ' invert' : ''}`}>
+      <div className="stack-viewer__header">
+        <div className="stack-viewer__title">Slice: {index + 1} / {totalShown}</div>
+        <label className="stack-viewer__checkboxLabel">
+          <input
+            type="checkbox"
+            checked={invert}
+            onChange={e => setInvert(e.target.checked)}
+          /> Invert
+        </label>
+      </div>
+
+      <div className="stack-viewer__viewportWrap">
+        {/* Cornerstone element */}
+        <div ref={elRef} className="stack-viewer__viewport" tabIndex={0} />
+
+        {/* Vertical slice slider on the right (same as Stack) */}
         <input
+          className="stack-viewer__slider"
           type="range"
           min={0}
           max={Math.max(0, totalShown - 1)}
-          value={Math.min(index, Math.max(0, totalShown - 1))}
-          onChange={(e) => setIndex(Number(e.target.value))}
-          style={{ width: '100%' }}
+          value={(totalShown - 1) - index}
+          onChange={(e) => {
+            const v = Number(e.target.value)
+            setIndex(clampIdx((totalShown - 1) - v))
+          }}
         />
-        <div style={{ marginTop: 8 }}>
-          <label><input type="checkbox" checked={invert} onChange={e => setInvert(e.target.checked)} /> Invert</label>
-        </div>
-        <div style={{ color: '#888', marginTop: 6 }}>
-          {ready ? 'MPR loaded' : 'Loading…'}
-          {error && <span style={{ color: 'tomato' }}> — {error}</span>}
-        </div>
       </div>
 
-      <div style={{ background: '#0d0d0d', borderRadius: 12, width: '100%', height: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div ref={elRef} style={{ width: '100%', height: '100%', background: '#111', borderRadius: 12 }} tabIndex={0} />
+      <div className="stack-viewer__status">
+        {error && <span className="stack-viewer__error">Error: {error}</span>}
+        {!error && !ready && <span className="stack-viewer__loading">Loading…</span>}
       </div>
     </div>
   )
@@ -171,11 +183,6 @@ export default function MprAxialViewer({ imageIds }: Props) {
 function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)) }
 function raf() { return new Promise<void>((r) => requestAnimationFrame(() => r())) }
 
-/**
- * Prefetch headers/pixels so metaData.get('imagePlaneModule', id) works
- * for every imageId even if the Stack tab hasn't been visited.
- * Batches requests to avoid flooding.
- */
 async function prefetchPlaneMeta(ids: string[]) {
   const missing: string[] = []
   for (const id of ids) {
@@ -186,11 +193,11 @@ async function prefetchPlaneMeta(ids: string[]) {
   const BATCH = 8
   for (let i = 0; i < missing.length; i += BATCH) {
     const chunk = missing.slice(i, i + BATCH)
-    await Promise.allSettled(chunk.map((id) => imageLoader.loadAndCacheImage(id))) // loads + parses
+    await Promise.allSettled(chunk.map((id) => imageLoader.loadAndCacheImage(id)))
   }
 }
 
-/** Same filter/sort you used before */
+/** Same filter/sort logic you used before */
 function buildMprImageIds(ids: string[]): { goodIds: string[]; reason?: string } {
   type Plane = { imageId: string; ipp: number[]; row: number[]; col: number[] }
   const planes: Plane[] = []
