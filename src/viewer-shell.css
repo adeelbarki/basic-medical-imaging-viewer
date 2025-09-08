@@ -9,6 +9,7 @@
 .viewerPane__header,
 .viewerPane__status {
   padding: 6px 8px;
+  margin-right: 20px;
   border-bottom: 1px solid #222;
   flex: 0 0 auto;
   min-height: 32px;               /* same across viewers */
