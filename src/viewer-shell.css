@@ -1,0 +1,37 @@
+/* viewer-shell.css */
+.viewerPane {                     /* common outer shell */
+  display: flex;
+  flex-direction: column;
+  height: 90%;
+  min-height: 0;                  /* critical for Grid/Flex children */
+}
+
+.viewerPane__header,
+.viewerPane__status {
+  padding: 6px 8px;
+  border-bottom: 1px solid #222;
+  flex: 0 0 auto;
+  min-height: 32px;               /* same across viewers */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewerPane__status {
+  border-bottom: none;
+  border-top: 1px solid #222;
+}
+
+.viewerPane__fill {               /* the actual viewport area */
+  flex: 1 1 auto;
+  min-height: 0;                  /* prevents collapsing to 0 */
+  display: flex;
+  position: relative;
+}
+
+.viewerPane__viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  outline: none;
+}

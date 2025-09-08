@@ -39,6 +39,7 @@ export default function Viewer() {
   return (
     <div style={{ 
           color: '#ddd', width: '100%', padding: 16, 
+          height: '100vh',
           display: 'grid', 
           gridTemplateRows: 'auto 1fr',
           gap: 12,

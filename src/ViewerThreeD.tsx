@@ -10,6 +10,7 @@ import {
 } from '@cornerstonejs/core'
 import { initCornerstone } from './cornerstoneInit'
 import { prefetchPlaneMeta, buildMprImageIds, raf } from './utils/helpers/mprUtils'
+import './Viewer-shell.css'
 
 type Props = { imageIds: string[] }
 
@@ -26,18 +27,41 @@ export default function ViewerThreeD({ imageIds }: Props) {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Wait until element has non-zero size (tabs/grid can start collapsed)
+  async function waitForNonZeroSize(el: HTMLElement, maxFrames = 30) {
+    for (let i = 0; i < maxFrames; i++) {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      if (w > 1 && h > 1) return
+      await raf()
+    }
+  }
+
   // Keep viewport sized to container
   useEffect(() => {
-    if (!rootRef.current) return
-    const engine = engineRef.current
+    const root = rootRef.current
+    if (!root) return
+
     const ro = new ResizeObserver(() => {
       try {
-        engine?.resize()         // notify Cornerstone about size change
+        engineRef.current?.resize()
         vpRef.current?.render()
       } catch {}
     })
-    ro.observe(rootRef.current)
-    return () => ro.disconnect()
+    ro.observe(root)
+
+    const onWinResize = () => {
+      try {
+        engineRef.current?.resize()
+        vpRef.current?.render()
+      } catch {}
+    }
+    window.addEventListener('resize', onWinResize)
+
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', onWinResize)
+    }
   }, [])
 
   useEffect(() => {
@@ -55,11 +79,9 @@ export default function ViewerThreeD({ imageIds }: Props) {
         const element = elRef.current
         if (!element) throw new Error('Viewport element not mounted')
 
-        // Ensure the panel has some height before enabling
-        // (defensive: if parent layout forgot to give height)
-        if (element.clientHeight < 2) {
-          element.style.minHeight = '400px'   // fallback to something visible
-        }
+        // Ensure layout has assigned real size before enabling Cornerstone
+        await waitForNonZeroSize(element)
+        if (destroyed) return
 
         await prefetchPlaneMeta(imageIds)
         const { goodIds, reason } = buildMprImageIds(imageIds)
@@ -78,7 +100,7 @@ export default function ViewerThreeD({ imageIds }: Props) {
           defaultOptions: { background: [0, 0, 0] },
         })
 
-        // Wait for layout to apply, then ensure Cornerstone reads sizes
+        // Sync Cornerstone with actual DOM size
         await raf()
         engine.resize()
 
@@ -111,33 +133,20 @@ export default function ViewerThreeD({ imageIds }: Props) {
     }
   }, [imageIds])
 
+  // ---- Shell with shared classes ----
   return (
-    <div
-      ref={rootRef}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0,       // allow child to grow
-        height: '100%',     // fill available space
-        width: '100%',
-      }}
-    >
-      <div style={{ padding: 6, borderBottom: '1px solid #222' }}>
-        <span>3D Volume</span>
+    <div className="viewerPane" ref={rootRef}>
+      <div className="viewerPane__header">
+        <div>3D Volume</div>
+        {/* TODO: add TF presets / MIP toggle / rotate tools */}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        <div
-          ref={elRef}
-          className="viewer3d__viewport"
-          tabIndex={0}
-          style={{ flex: 1, outline: 'none', minHeight: 0 }}
-        />
+      <div className="viewerPane__fill">
+        <div ref={elRef} className="viewerPane__viewport" tabIndex={0} />
       </div>
 
-      <div style={{ padding: 6, height: 28 }}>
-        {error && <span style={{ color: '#f66' }}>Error: {error}</span>}
-        {!error && !ready && <span>Loading…</span>}
+      <div className="viewerPane__status">
+        {error ? <span style={{ color: '#f66' }}>{error}</span> : ready ? null : 'Loading…'}
       </div>
     </div>
   )
