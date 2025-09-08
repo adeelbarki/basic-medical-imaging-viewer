@@ -13,7 +13,7 @@
 // }
 
 // cornerstoneInit.ts
-import { init as coreInit } from '@cornerstonejs/core';
+import { init as coreInit, setUseCPURendering } from '@cornerstonejs/core';
 import '@cornerstonejs/streaming-image-volume-loader';
 import { init as dicomImageLoaderInit } from '@cornerstonejs/dicom-image-loader';
 
@@ -26,7 +26,7 @@ export async function initCornerstone() {
 
   await coreInit();
   await dicomImageLoaderInit();
-
+  setUseCPURendering(false)
   globalThis.__CS_INIT_DONE__ = true;
 }
 
