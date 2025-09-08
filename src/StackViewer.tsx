@@ -4,7 +4,6 @@ import {
   Enums,
   type Types,
   getRenderingEngine,
-  setUseCPURendering,
 } from '@cornerstonejs/core'
 import { initCornerstone } from './cornerstoneInit'
 import './StackViewer.css'
