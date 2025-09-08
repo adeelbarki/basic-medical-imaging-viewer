@@ -12,11 +12,24 @@ import { initCornerstone } from './cornerstoneInit'
 import { prefetchPlaneMeta, buildMprImageIds, raf } from './utils/helpers/mprUtils'
 import './Viewer-shell.css'
 
+// --- NEW: Cornerstone Tools imports ---
+import {
+  init as csToolsInit,
+  ToolGroupManager,
+  addTool,
+  PanTool,
+  ZoomTool,
+  TrackballRotateTool,
+  VolumeRotateTool,
+  Enums as csToolsEnums,
+} from '@cornerstonejs/tools'
+
 type Props = { imageIds: string[] }
 
 const ENGINE_ID = 'ENGINE_SHARED'
 const VIEWPORT_ID = 'VP_3D'
 const VOLUME_ID_BASE = 'cornerstoneStreamingImageVolume:study-3d'
+const TOOLGROUP_ID = 'TG_3D'
 
 /* ---------------- Transfer Function Presets (simple CT examples) ---------------- */
 type TFNode = { x: number; r: number; g: number; b: number; a: number } // x in HU, r/g/b/a in 0..1
@@ -85,38 +98,29 @@ function applyAppearance(
   const vtkVol = entry?.actor ?? entry
   const prop = vtkVol?.getProperty?.()
   const mapper = entry?.mapper ?? vtkVol?.getMapper?.()
+
   if (!prop || !mapper) return
 
   if (mode === 'VR (Composite)') {
-    // 1) Blend: Composite
     setCompositeBlend(anyVp, { mapper })
-
-    // 2) Transfer function nodes
     const nodes = TF_PRESETS[preset]
     const ctf = prop.getRGBTransferFunction(0)
     const sof = prop.getScalarOpacity(0)
-    if (ctf?.removeAllPoints) ctf.removeAllPoints()
-    if (sof?.removeAllPoints) sof.removeAllPoints()
+    ctf?.removeAllPoints?.()
+    sof?.removeAllPoints?.()
     nodes.forEach((n) => {
       ctf.addRGBPoint(n.x, n.r, n.g, n.b)
       sof.addPoint(n.x, n.a)
     })
   } else {
-    // MIP: Ignore color TF; emphasize bright structures
     setMIPBlend(anyVp, { mapper })
-
-    // Give MIP a sensible grayscale and opacity ramp in HU
     const ctf = prop.getRGBTransferFunction(0)
     const sof = prop.getScalarOpacity(0)
-    if (ctf?.removeAllPoints) ctf.removeAllPoints()
-    if (sof?.removeAllPoints) sof.removeAllPoints()
-
-    // Grayscale ramp (window ~ [100, 1500] HU)
+    ctf?.removeAllPoints?.()
+    sof?.removeAllPoints?.()
     ctf.addRGBPoint(-1000, 0.0, 0.0, 0.0)
     ctf.addRGBPoint(   100, 0.4, 0.4, 0.4)
     ctf.addRGBPoint(  1500, 1.0, 1.0, 1.0)
-
-    // Opacity: very low until soft tissue, then steeper into bone
     sof.addPoint(-1000, 0.00)
     sof.addPoint(   100, 0.02)
     sof.addPoint(   300, 0.08)
@@ -128,82 +132,20 @@ function applyAppearance(
   vp.render()
 }
 
-/* ---------------- Vector/Camera math for orbit/zoom ---------------- */
-type Vec3 = [number, number, number]
-const add = (a: Vec3, b: Vec3): Vec3 => [a[0]+b[0], a[1]+b[1], a[2]+b[2]]
-const sub = (a: Vec3, b: Vec3): Vec3 => [a[0]-b[0], a[1]-b[1], a[2]-b[2]]
-const mul = (a: Vec3, s: number): Vec3 => [a[0]*s, a[1]*s, a[2]*s]
-const dot = (a: Vec3, b: Vec3) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
-const cross = (a: Vec3, b: Vec3): Vec3 => [ a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0] ]
-const len = (a: Vec3) => Math.hypot(a[0], a[1], a[2])
-const norm = (a: Vec3): Vec3 => {
-  const L = len(a) || 1
-  return [a[0]/L, a[1]/L, a[2]/L]
-}
-function rotateAroundAxis(v: Vec3, axis: Vec3, angle: number): Vec3 {
-  // Rodrigues' rotation formula
-  const k = norm(axis)
-  const cos = Math.cos(angle), sin = Math.sin(angle)
-  const term1 = mul(v, cos)
-  const term2 = mul(cross(k, v), sin)
-  const term3 = mul(k, dot(k, v) * (1 - cos))
-  return add(add(term1, term2), term3)
+// Ensure Tools is initialized once (safe to call repeatedly)
+let toolsReady = false
+function ensureTools() {
+  if (!toolsReady) {
+    csToolsInit() // initialize @cornerstonejs/tools
+    // Register the tools we need once
+    addTool(TrackballRotateTool)
+    addTool(PanTool)
+    addTool(ZoomTool)
+    addTool(VolumeRotateTool)
+    toolsReady = true
+  }
 }
 
-function orbitCamera(vp: Types.IVolumeViewport, dx: number, dy: number) {
-  // pixels -> radians
-  const YAW_SPEED = 0.005
-  const PITCH_SPEED = 0.005
-
-  const cam = vp.getCamera()
-  const P = cam.position as Vec3
-  const F = cam.focalPoint as Vec3
-  const U = norm(cam.viewUp as Vec3)
-
-  // View direction (from camera toward focal point)
-  const V = norm(sub(F, P))
-  // Right vector = V x Up
-  const R = norm(cross(V, U))
-
-  // Apply yaw (horizontal drag) around Up, then pitch (vertical drag) around Right
-  const yaw = -dx * YAW_SPEED
-  const pitch = dy * PITCH_SPEED
-
-  let V1 = rotateAroundAxis(V, U, yaw)
-  let U1 = rotateAroundAxis(U, U, yaw) // same as U, keeps orthogonality
-  const R1 = norm(cross(V1, U1))
-  const V2 = rotateAroundAxis(V1, R1, pitch)
-  let U2 = rotateAroundAxis(U1, R1, pitch)
-
-  // Re-orthogonalize
-  const R2 = norm(cross(V2, U2))
-  U2 = norm(cross(R2, V2))
-
-  const dist = len(sub(F, P))
-  const newPos = sub(F, mul(V2, dist)) as Vec3
-
-  vp.setCamera({ position: newPos, focalPoint: F, viewUp: U2 })
-  vp.render()
-}
-
-function zoomCamera(vp: Types.IVolumeViewport, deltaY: number) {
-  // wheel down -> zoom in; wheel up -> zoom out
-  const ZOOM_FACTOR_PER_DELTA = 0.0015
-  const cam = vp.getCamera()
-  const P = cam.position as Vec3
-  const F = cam.focalPoint as Vec3
-  const V = norm(sub(F, P))
-  const d = len(sub(F, P))
-
-  const scale = Math.exp(deltaY * ZOOM_FACTOR_PER_DELTA)
-  const newDist = Math.max(0.01, d * scale) // avoid crossing focal point
-  const newPos = sub(F, mul(V, newDist)) as Vec3
-
-  vp.setCamera({ position: newPos, focalPoint: F, viewUp: cam.viewUp as Vec3 })
-  vp.render()
-}
-
-/* ---------------- Component ---------------- */
 export default function ViewerThreeD({ imageIds }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const elRef = useRef<HTMLDivElement | null>(null)
@@ -216,12 +158,9 @@ export default function ViewerThreeD({ imageIds }: Props) {
   const [preset, setPreset] = useState<PresetName>('CT Soft Tissue')
   const [blend, setBlend] = useState<BlendMode>('VR (Composite)')
 
-  // Wait until element has non-zero size (tabs/grid can start collapsed)
   async function waitForNonZeroSize(el: HTMLElement, maxFrames = 30) {
     for (let i = 0; i < maxFrames; i++) {
-      const w = el.clientWidth
-      const h = el.clientHeight
-      if (w > 1 && h > 1) return
+      if (el.clientWidth > 1 && el.clientHeight > 1) return
       await raf()
     }
   }
@@ -230,35 +169,22 @@ export default function ViewerThreeD({ imageIds }: Props) {
   useEffect(() => {
     const root = rootRef.current
     if (!root) return
-
     const ro = new ResizeObserver(() => {
-      try {
-        engineRef.current?.resize()
-        vpRef.current?.render()
-      } catch {}
+      try { engineRef.current?.resize(); vpRef.current?.render() } catch {}
     })
     ro.observe(root)
-
-    const onWinResize = () => {
-      try {
-        engineRef.current?.resize()
-        vpRef.current?.render()
-      } catch {}
-    }
-    window.addEventListener('resize', onWinResize)
-
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', onWinResize)
-    }
+    const onWin = () => { try { engineRef.current?.resize(); vpRef.current?.render() } catch {} }
+    window.addEventListener('resize', onWin)
+    return () => { ro.disconnect(); window.removeEventListener('resize', onWin) }
   }, [])
 
-  // Build & render 3D volume
+  // Build & render 3D volume + attach tools
   useEffect(() => {
     let destroyed = false
     ;(async () => {
       try {
         await initCornerstone()
+        ensureTools() // <— Tools init + tool registration
         if (destroyed) return
 
         setUseCPURendering(false)
@@ -269,7 +195,6 @@ export default function ViewerThreeD({ imageIds }: Props) {
         const element = elRef.current
         if (!element) throw new Error('Viewport element not mounted')
 
-        // Ensure layout has assigned real size before enabling Cornerstone
         await waitForNonZeroSize(element)
         if (destroyed) return
 
@@ -290,7 +215,6 @@ export default function ViewerThreeD({ imageIds }: Props) {
           defaultOptions: { background: [0, 0, 0] },
         })
 
-        // Sync Cornerstone with actual DOM size
         await raf()
         engine.resize()
 
@@ -306,6 +230,34 @@ export default function ViewerThreeD({ imageIds }: Props) {
         await vvp.setVolumes([{ volumeId: VOLUME_ID }])
         vvp.resetCamera()
 
+        // ----- NEW: ToolGroup wiring (bind this viewport) -----
+        let tg = ToolGroupManager.getToolGroup(TOOLGROUP_ID)
+        if (!tg) tg = ToolGroupManager.createToolGroup(TOOLGROUP_ID)
+
+        // Add tools (idempotent)
+        try { tg.addTool(TrackballRotateTool.toolName) } catch {}
+        try { tg.addTool(PanTool.toolName) } catch {}
+        try { tg.addTool(ZoomTool.toolName) } catch {}
+        try { tg.addTool(VolumeRotateTool.toolName) } catch {}
+
+        // Bind this viewport to the group
+        try { tg.addViewport(VIEWPORT_ID, ENGINE_ID) } catch {}
+
+        // Set active bindings: left=rotate, middle=pan, right=zoom, wheel=rotate
+        tg.setToolActive(TrackballRotateTool.toolName, {
+          bindings: [{ mouseButton: csToolsEnums.MouseBindings.Primary }],
+        })
+        tg.setToolActive(PanTool.toolName, {
+          bindings: [{ mouseButton: csToolsEnums.MouseBindings.Auxiliary }],
+        })
+        tg.setToolActive(ZoomTool.toolName, {
+          bindings: [{ mouseButton: csToolsEnums.MouseBindings.Secondary }],
+        })
+        tg.setToolActive(VolumeRotateTool.toolName, {
+          bindings: [{ mouseWheel: true }],
+        })
+        // ------------------------------------------------------
+
         // Apply initial appearance (Composite + preset by default)
         applyAppearance(vvp, VOLUME_ID, preset, blend)
 
@@ -319,10 +271,13 @@ export default function ViewerThreeD({ imageIds }: Props) {
 
     return () => {
       destroyed = true
+      // Optional: remove this viewport from the toolgroup on unmount
+      try {
+        const tg = ToolGroupManager.getToolGroup(TOOLGROUP_ID)
+        tg?.removeViewports?.([VIEWPORT_ID]) || tg?.removeViewport?.(VIEWPORT_ID, ENGINE_ID)
+      } catch {}
       const eng = engineRef.current
-      if (eng) {
-        try { eng.disableElement(VIEWPORT_ID) } catch {}
-      }
+      if (eng) { try { eng.disableElement(VIEWPORT_ID) } catch {} }
       vpRef.current = null
       volumeIdRef.current = null
     }
@@ -333,64 +288,8 @@ export default function ViewerThreeD({ imageIds }: Props) {
     const vp = vpRef.current
     const volId = volumeIdRef.current
     if (!vp || !volId) return
-    try {
-      applyAppearance(vp, volId, preset, blend)
-    } catch {}
+    try { applyAppearance(vp, volId, preset, blend) } catch {}
   }, [preset, blend])
-
-  // Pointer interactions: left-drag orbit, wheel zoom
-  useEffect(() => {
-    const el = elRef.current
-    if (!el) return
-    let dragging = false
-    let lastX = 0, lastY = 0
-    const onPointerDown = (e: PointerEvent) => {
-      if (e.button !== 0) return // left button only
-      dragging = true
-      lastX = e.clientX
-      lastY = e.clientY
-      el.setPointerCapture?.(e.pointerId)
-      e.preventDefault()
-    }
-    const onPointerMove = (e: PointerEvent) => {
-      if (!dragging) return
-      const vp = vpRef.current
-      if (!vp) return
-      const dx = e.clientX - lastX
-      const dy = e.clientY - lastY
-      lastX = e.clientX
-      lastY = e.clientY
-      orbitCamera(vp, dx, dy)
-      e.preventDefault()
-    }
-    const onPointerUp = (e: PointerEvent) => {
-      if (e.button !== 0) return
-      dragging = false
-      el.releasePointerCapture?.(e.pointerId)
-      e.preventDefault()
-    }
-    const onPointerLeave = () => { dragging = false }
-    const onWheel = (e: WheelEvent) => {
-      const vp = vpRef.current
-      if (!vp) return
-      zoomCamera(vp, e.deltaY)
-      e.preventDefault()
-    }
-
-    el.addEventListener('pointerdown', onPointerDown)
-    window.addEventListener('pointermove', onPointerMove)
-    window.addEventListener('pointerup', onPointerUp)
-    el.addEventListener('pointerleave', onPointerLeave)
-    el.addEventListener('wheel', onWheel, { passive: false })
-
-    return () => {
-      el.removeEventListener('pointerdown', onPointerDown)
-      window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('pointerup', onPointerUp)
-      el.removeEventListener('pointerleave', onPointerLeave)
-      el.removeEventListener('wheel', onWheel as any)
-    }
-  }, [])
 
   // ---- Shell with shared classes ----
   return (
@@ -412,7 +311,7 @@ export default function ViewerThreeD({ imageIds }: Props) {
           <select
             value={preset}
             onChange={(e) => setPreset(e.target.value as PresetName)}
-            disabled={blend === 'MIP (Max Intensity)'} // Preset color is irrelevant for MIP
+            disabled={blend === 'MIP (Max Intensity)'}
             style={{ background: '#1a1a1a', color: '#ddd', border: '1px solid #333', borderRadius: 6, padding: '4px 8px' }}
           >
             {Object.keys(TF_PRESETS).map((name) => (
@@ -427,7 +326,7 @@ export default function ViewerThreeD({ imageIds }: Props) {
       </div>
 
       <div className="viewerPane__status">
-        {error ? <span style={{ color: '#f66' }}>Error: {error}</span> : ready ? null : 'Loading…'}
+        {error ? <span style={{ color: '#f66' }}>{error}</span> : ready ? null : 'Loading…'}
       </div>
     </div>
   )
