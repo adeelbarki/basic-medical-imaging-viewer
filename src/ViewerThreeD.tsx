@@ -62,6 +62,28 @@ type PresetName = keyof typeof TF_PRESETS
 /* ---------------- Blend Mode ---------------- */
 type BlendMode = 'VR (Composite)' | 'MIP (Max Intensity)'
 
+function makeBoneTFfromWWL(ww: number, wl: number): TFNode[] {
+  // Convert WW/WL to HU bounds
+  const L = wl - ww / 2;   // lower HU
+  const U = wl + ww / 2;   // upper HU
+
+  // Build a simple beige bone TF within [L,U]
+  // Opacity is 0 below L, ramps through cortical bone, near-opaque near U
+  const start = Math.max(L + 0.1 * ww, 150); // start of soft-tissue-to-bone ramp
+  const mid1  = Math.min(Math.max(700, L + 0.3 * ww), U);
+  const mid2  = Math.min(Math.max(1200, L + 0.5 * ww), U);
+
+  return [
+    { x: -1000, r: 0.00, g: 0.00, b: 0.00, a: 0.00 }, // air
+    { x: L,     r: 0.00, g: 0.00, b: 0.00, a: 0.00 }, // window lower
+    { x: start, r: 0.80, g: 0.68, b: 0.55, a: 0.10 }, // soft tissue -> light beige
+    { x: mid1,  r: 0.92, g: 0.85, b: 0.70, a: 0.28 }, // trabecular
+    { x: mid2,  r: 0.98, g: 0.95, b: 0.88, a: 0.60 }, // cortical
+    { x: U,     r: 1.00, g: 1.00, b: 1.00, a: 0.95 }, // window upper (near opaque)
+  ]
+}
+
+
 /* -------- Helpers to work across CS3D versions (viewport vs vtk actor) -------- */
 function getVolumeActorEntry(vp: any, volumeId?: string) {
   const entries = (typeof vp.getActors === 'function') ? vp.getActors() : []
@@ -103,7 +125,10 @@ function applyAppearance(
 
   if (mode === 'VR (Composite)') {
     setCompositeBlend(anyVp, { mapper })
-    const nodes = TF_PRESETS[preset]
+    const nodes =
+    preset === 'CT Bone'
+      ? makeBoneTFfromWWL(2500, 480) // match "Bone 2500/480"
+      : TF_PRESETS[preset]
     const ctf = prop.getRGBTransferFunction(0)
     const sof = prop.getScalarOpacity(0)
     ctf?.removeAllPoints?.()
